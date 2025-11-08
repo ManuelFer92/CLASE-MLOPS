@@ -1,0 +1,98 @@
+name: model-training
+on: [push]
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      # --- 1️⃣ Clona el repositorio ---
+      - uses: actions/checkout@v3
+
+      # --- 2️⃣ Configura Python ---
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      # --- 3️⃣ Instala CML para publicar reportes ---
+      - uses: iterative/setup-cml@v1
+
+      # --- 4️⃣ Entrenamiento y generación de métricas ---
+      - name: Train model and generate metrics
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🚀 Instalando dependencias..."
+          pip install -r requirements.txt
+
+          echo "📘 Ejecutando entrenamiento..."
+          python train.py
+
+          echo "📊 Generando gráficos de resultados..."
+          python - <<'EOF'
+          import pandas as pd
+          import matplotlib.pyplot as plt
+          import seaborn as sns
+          import re
+
+          # Leer el metrics.txt generado por train.py
+          with open("metrics.txt", "r", encoding="utf-8") as f:
+              text = f.read()
+
+          # Extraer métricas por clase (labels con mayúsculas/minúsculas y tildes)
+          lines = re.findall(r"([A-Za-zÁÉÍÓÚÜÑñ\s]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)", text)
+          if not lines:
+              print("⚠️ No se encontraron métricas por clase, revisa metrics.txt")
+          else:
+              df = pd.DataFrame(lines, columns=["Label", "Precision", "Recall", "F1", "Support"])
+              df[["Precision", "Recall", "F1"]] = df[["Precision", "Recall", "F1"]].astype(float)
+              df["Label"] = df["Label"].str.strip()
+
+              # Filtrar solo las clases válidas (sin macro/weighted avg)
+              df = df[~df["Label"].str.contains("avg|accuracy|Confusion", case=False)]
+
+              # --- 🎨 Estilo corporativo Core365 ---
+              sns.set(style="whitegrid", font_scale=1.0)
+              palette = ["#0078D4", "#742774", "#FFB900"]
+
+              # --- Gráfico F1-score ---
+              plt.figure(figsize=(7,4))
+              sns.barplot(x="Label", y="F1", data=df, palette=palette)
+              plt.title("Comparación de F1-score por categoría", fontsize=13, fontweight="bold")
+              plt.ylabel("F1-score")
+              plt.xlabel("Categorías")
+              plt.ylim(0, 1)
+              for i, v in enumerate(df["F1"]):
+                  plt.text(i, v + 0.02, f"{v:.2f}", ha="center", fontsize=9)
+              plt.tight_layout()
+              plt.savefig("plot_f1.png", dpi=200)
+              print("✅ Gráfico F1-score generado: plot_f1.png")
+
+              # --- Gráfico Precision y Recall ---
+              plt.figure(figsize=(7,4))
+              df_melt = df.melt(id_vars=["Label"], value_vars=["Precision", "Recall"],
+                                var_name="Métrica", value_name="Valor")
+              sns.barplot(x="Label", y="Valor", hue="Métrica", data=df_melt,
+                          palette=["#0078D4", "#742774"])
+              plt.title("Comparación de Precision y Recall por categoría", fontsize=13, fontweight="bold")
+              plt.ylabel("Valor")
+              plt.xlabel("Categorías")
+              plt.ylim(0, 1)
+              plt.legend(title="", loc="upper right")
+              plt.tight_layout()
+              plt.savefig("plot_pr.png", dpi=200)
+              print("✅ Gráfico Precision/Recall generado: plot_pr.png")
+
+          EOF
+
+          echo "📝 Generando reporte Markdown..."
+          echo "## 📈 Resultados de Entrenamiento" > report.md
+          echo "" >> report.md
+          cat metrics.txt >> report.md
+          echo "" >> report.md
+          echo "### 🔹 Desempeño visual" >> report.md
+          echo "![](./plot_f1.png)" >> report.md
+          echo "" >> report.md
+          echo "![](./plot_pr.png)" >> report.md
+
+          echo "💬 Publicando comentario con CML..."
+          cml comment create report.md
