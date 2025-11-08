@@ -1,0 +1,74 @@
+name: model-training
+on: [push]
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      # --- Clona el repositorio ---
+      - uses: actions/checkout@v3
+
+      # --- Configura Python ---
+      - uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      # --- Instala CML para reportes automáticos ---
+      - uses: iterative/setup-cml@v1
+
+      # --- Entrenamiento y reporte ---
+      - name: Train model and generate metrics
+        env:
+          REPO_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "🚀 Instalando dependencias..."
+          pip install -r requirements.txt
+
+          echo "📘 Ejecutando entrenamiento..."
+          python train.py
+
+          echo "📊 Generando gráfico de resultados..."
+          python - <<'EOF'
+          import pandas as pd
+          import matplotlib.pyplot as plt
+          import seaborn as sns
+          import re
+
+          # Leer el metrics.txt generado por train.py
+          with open("metrics.txt", "r", encoding="utf-8") as f:
+              text = f.read()
+
+          # Extraer secciones del Classification Report
+          lines = re.findall(r"([A-Z]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+(\d+)", text)
+          if not lines:
+              print("⚠️ No se encontraron métricas por clase, revisa metrics.txt")
+          else:
+              df = pd.DataFrame(lines, columns=["Label", "Precision", "Recall", "F1", "Support"])
+              df[["Precision","Recall","F1"]] = df[["Precision","Recall","F1"]].astype(float)
+
+              # --- Configuración de estilo corporativo Core365 ---
+              sns.set(style="whitegrid")
+              palette = ["#0078D4", "#742774", "#FFB900"]  # Colores Core365
+              plt.figure(figsize=(7,4))
+              sns.barplot(x="Label", y="F1", data=df, palette=palette)
+
+              plt.title("Comparación de F1-score por categoría", fontsize=13, fontweight="bold")
+              plt.ylabel("F1-score")
+              plt.xlabel("Categorías")
+              plt.ylim(0, 1)
+              plt.tight_layout()
+              plt.savefig("plot.png", dpi=200)
+              print("✅ Gráfico generado como plot.png")
+
+          EOF
+
+          echo "📝 Generando reporte Markdown..."
+          echo "## 📈 Resultados de Entrenamiento" > report.md
+          echo "" >> report.md
+          cat metrics.txt >> report.md
+          echo "" >> report.md
+          echo "### 🔹 Desempeño visual" >> report.md
+          echo "![](./plot.png)" >> report.md
+
+          echo "💬 Publicando comentario con CML..."
+          cml comment create report.md
